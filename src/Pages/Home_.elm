@@ -1,4 +1,4 @@
-module Pages.Home_ exposing (Model, Msg, page)
+port module Pages.Home_ exposing (Model, Msg, page)
 
 import Browser.Events
 import Dict exposing (Dict)
@@ -46,6 +46,7 @@ type Phase
     | SpawningNewTile Id
     | PlayerWon
     | GameOver
+    | ReadingHelpText
 
 
 type alias Coordinate =
@@ -130,11 +131,14 @@ spawnTileInGrid existingTiles =
 
 type Msg
     = PressedArrowKey Direction
+    | UserSwiped Direction
     | TileSlideAnimationFinished
     | TileSpawned Tile
     | TileSpawnAnimationReady
     | TileCouldNotBeSpawned
     | ClickedNewGame
+    | ClickedHelpText
+    | DismissedHelpDialog
 
 
 type Direction
@@ -155,32 +159,10 @@ update : Msg -> Model -> ( Model, Effect Msg )
 update msg model =
     case msg of
         PressedArrowKey direction ->
-            if model.phase == ReadyForInput then
-                let
-                    newTiles : List Tile
-                    newTiles =
-                        slide direction model.tiles
+            moveTilesInDirection direction model
 
-                    noTilesHaveMoved : Bool
-                    noTilesHaveMoved =
-                        List.sortBy .id newTiles
-                            == List.sortBy .id model.tiles
-                in
-                if noTilesHaveMoved then
-                    ( model, Effect.none )
-
-                else
-                    ( { model
-                        | tiles = newTiles
-                        , phase = SlidingTiles
-                      }
-                    , sendDelayedMessage duration TileSlideAnimationFinished
-                    )
-
-            else
-                ( model
-                , Effect.none
-                )
+        UserSwiped direction ->
+            moveTilesInDirection direction model
 
         TileSlideAnimationFinished ->
             let
@@ -205,6 +187,11 @@ update msg model =
                 , Effect.none
                 )
 
+            else if noValidMovesLeft model then
+                ( { model | phase = GameOver }
+                , Effect.none
+                )
+
             else
                 ( { model | phase = ReadyForInput }
                 , Effect.none
@@ -217,6 +204,61 @@ update msg model =
 
         ClickedNewGame ->
             startNewGame
+
+        ClickedHelpText ->
+            ( { model | phase = ReadingHelpText }
+            , Effect.none
+            )
+
+        DismissedHelpDialog ->
+            ( { model | phase = ReadyForInput }
+            , Effect.none
+            )
+
+
+noValidMovesLeft : Model -> Bool
+noValidMovesLeft model =
+    let
+        noTilesHaveBeenMoved : Direction -> Bool
+        noTilesHaveBeenMoved direction =
+            List.sortBy .id (slide direction model.tiles)
+                == List.sortBy .id model.tiles
+    in
+    [ Up, Left, Down, Right ]
+        |> List.all noTilesHaveBeenMoved
+
+
+moveTilesInDirection :
+    Direction
+    -> Model
+    -> ( Model, Effect Msg )
+moveTilesInDirection direction model =
+    if model.phase == ReadyForInput then
+        let
+            newTiles : List Tile
+            newTiles =
+                slide direction model.tiles
+
+            noTilesHaveMoved : Bool
+            noTilesHaveMoved =
+                List.sortBy .id newTiles
+                    == List.sortBy .id model.tiles
+        in
+        if noTilesHaveMoved then
+            ( model, Effect.none )
+
+        else
+            ( { model
+                | tiles = newTiles
+                , phase = SlidingTiles
+              }
+            , sendDelayedMessage duration TileSlideAnimationFinished
+            )
+
+    else
+        ( model
+        , Effect.none
+        )
 
 
 is2048 : Tile -> Bool
@@ -421,7 +463,27 @@ slide direction tiles =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    Browser.Events.onKeyDown keyPressDecoder
+    Sub.batch
+        [ Browser.Events.onKeyDown keyPressDecoder
+        , touch
+            (\delta ->
+                if Basics.abs delta.dx > Basics.abs delta.dy then
+                    if delta.dx < 0 then
+                        UserSwiped Left
+
+                    else
+                        UserSwiped Right
+
+                else if delta.dy < 0 then
+                    UserSwiped Up
+
+                else
+                    UserSwiped Down
+            )
+        ]
+
+
+port touch : ({ dx : Float, dy : Float } -> msg) -> Sub msg
 
 
 keyPressDecoder : Json.Decode.Decoder Msg
@@ -456,7 +518,7 @@ keyPressDecoder =
 
 view : Model -> View Msg
 view model =
-    { title = "Homepage"
+    { title = "2048"
     , body =
         [ div [ style "text-align" "center" ]
             [ h1 [ style "font-size" "3rem" ] [ text "2048" ]
@@ -474,17 +536,38 @@ view model =
                     |> List.map (viewKeyedTile model)
                 )
             ]
+        , button
+            [ class "help"
+            , Html.Events.onClick ClickedHelpText
+            ]
+            [ text "How do I play?" ]
         , case model.phase of
             PlayerWon ->
                 viewDialog
                     { title = "You won!"
-                    , buttonLabel = "New game"
+                    , description = [ "Final score: " ++ String.fromInt model.score ]
+                    , button = ( "New game", ClickedNewGame )
                     }
 
             GameOver ->
                 viewDialog
                     { title = "Game over"
-                    , buttonLabel = "Try again?"
+                    , description =
+                        [ "No more tiles could be moved..."
+                        , "Final score: " ++ String.fromInt model.score
+                        ]
+                    , button = ( "Try again?", ClickedNewGame )
+                    }
+
+            ReadingHelpText ->
+                viewDialog
+                    { title = "How to play"
+                    , description =
+                        [ "Use your arrow keys or touch controls to slide tiles up, down, left, or right."
+                        , "When two tiles with the same value collide, they'll combine into one tile with double the value!"
+                        , "Can you keep combining tiles until you reach 2048?"
+                        ]
+                    , button = ( "Return to game", DismissedHelpDialog )
                     }
 
             _ ->
@@ -495,19 +578,26 @@ view model =
 
 viewDialog :
     { title : String
-    , buttonLabel : String
+    , description : List String
+    , button : ( String, Msg )
     }
     -> Html Msg
 viewDialog props =
+    let
+        ( label, onClick ) =
+            props.button
+    in
     div []
         [ div [ class "dialog__overlay" ] []
         , div [ class "dialog" ]
             [ h3 [] [ text props.title ]
+            , div []
+                (List.map (\x -> p [] [ text x ]) props.description)
             , button
                 [ class "button"
-                , Html.Events.onClick ClickedNewGame
+                , Html.Events.onClick onClick
                 ]
-                [ text props.buttonLabel ]
+                [ text label ]
             ]
         ]
 
