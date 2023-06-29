@@ -536,11 +536,21 @@ view model =
                     |> List.map (viewKeyedTile model)
                 )
             ]
-        , button
-            [ class "help"
-            , Html.Events.onClick ClickedHelpText
+        , div []
+            [ button
+                [ class "help"
+                , Html.Events.onClick ClickedHelpText
+                ]
+                [ text "How do I play?" ]
             ]
-            [ text "How do I play?" ]
+        , div [ style "margin-top" "2rem" ]
+            [ a
+                [ href "https://github.com/elm-land/2048"
+                , target "_blank"
+                , class "help"
+                ]
+                [ text "Source code" ]
+            ]
         , case model.phase of
             PlayerWon ->
                 viewDialog
