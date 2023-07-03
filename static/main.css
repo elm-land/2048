@@ -108,7 +108,8 @@ body {
 
   z-index: 3;
   min-width: 200px;
-  max-width: calc(100vw - 2rem);
+  width: calc(100vw - 2rem);
+  max-width: 400px;
   background-color: var(--color_bg);
   border: solid 1px var(--color_bgGrid);
   padding: 2rem 1rem;
@@ -157,4 +158,22 @@ body {
 
 .help:hover {
   opacity: 1;
+}
+
+.buttons {
+  display: flex;
+  gap: 1rem;
+}
+
+.button--secondary {
+  background-color: var(--color_bg);
+  color: var(--color_fg);
+}
+
+.button--secondary:hover {
+  background-color: var(--color_bg2);
+}
+
+.button--secondary:active {
+  background-color: var(--color_bg4);
 }

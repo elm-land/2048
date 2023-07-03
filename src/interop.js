@@ -1,3 +1,9 @@
+export const flags = ({ env }) => {
+  return {
+    game: JSON.parse(localStorage.game) || null
+  }
+}
+
 export const onReady = ({ app }) => {
 
   // TOUCH CONTROLS
@@ -33,4 +39,12 @@ export const onReady = ({ app }) => {
       }
     })
   }
+
+  // SAVE GAME TO LOCAL STORAGE FOR SAFE REFRESH
+  if (app.ports && app.ports.saveGame) {
+    app.ports.saveGame.subscribe(game => {
+      localStorage.setItem('game', JSON.stringify(game))
+    })
+  }
+
 }

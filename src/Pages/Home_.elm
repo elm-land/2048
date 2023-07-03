@@ -3,11 +3,13 @@ port module Pages.Home_ exposing (Model, Msg, page)
 import Browser.Events
 import Dict exposing (Dict)
 import Effect exposing (Effect)
+import Game
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events
 import Html.Keyed
 import Json.Decode
+import Json.Encode
 import List.Extra
 import Page exposing (Page)
 import Process
@@ -22,7 +24,7 @@ import View exposing (View)
 page : Shared.Model -> Route () -> Page Model Msg
 page shared route =
     Page.new
-        { init = init
+        { init = init shared
         , update = update
         , subscriptions = subscriptions
         , view = view
@@ -47,6 +49,7 @@ type Phase
     | PlayerWon
     | GameOver
     | ReadingHelpText
+    | ConfirmingNewGame
 
 
 type alias Coordinate =
@@ -68,18 +71,37 @@ type alias Value =
     Int
 
 
-init : () -> ( Model, Effect Msg )
-init () =
-    startNewGame
+init : Shared.Model -> () -> ( Model, Effect Msg )
+init shared () =
+    case shared.existingGame of
+        Just game ->
+            ( applyWinCondition
+                { phase = ReadyForInput
+                , tiles = game.tiles
+                , score = game.score
+                }
+            , Effect.none
+            )
+
+        Nothing ->
+            startNewGame
 
 
 startNewGame : ( Model, Effect Msg )
 startNewGame =
-    ( { phase = ReadyForInput
-      , tiles = []
-      , score = 0
-      }
-    , spawnTileInGrid []
+    let
+        model : Model
+        model =
+            { phase = ReadyForInput
+            , tiles = []
+            , score = 0
+            }
+    in
+    ( model
+    , Effect.batch
+        [ saveCurrentGame model
+        , spawnTileInGrid model.tiles
+        ]
     )
 
 
@@ -136,9 +158,10 @@ type Msg
     | TileSpawned Tile
     | TileSpawnAnimationReady
     | TileCouldNotBeSpawned
-    | ClickedNewGame
+    | ClickedNewGameFromGameScreen
+    | ClickedNewGameFromDialog
     | ClickedHelpText
-    | DismissedHelpDialog
+    | DismissedDialog
 
 
 type Direction
@@ -182,27 +205,21 @@ update msg model =
             )
 
         TileSpawnAnimationReady ->
-            if List.any is2048 model.tiles then
-                ( { model | phase = PlayerWon }
-                , Effect.none
-                )
-
-            else if noValidMovesLeft model then
-                ( { model | phase = GameOver }
-                , Effect.none
-                )
-
-            else
-                ( { model | phase = ReadyForInput }
-                , Effect.none
-                )
+            ( applyWinCondition model
+            , saveCurrentGame model
+            )
 
         TileCouldNotBeSpawned ->
             ( { model | phase = GameOver }
             , Effect.none
             )
 
-        ClickedNewGame ->
+        ClickedNewGameFromGameScreen ->
+            ( { model | phase = ConfirmingNewGame }
+            , Effect.none
+            )
+
+        ClickedNewGameFromDialog ->
             startNewGame
 
         ClickedHelpText ->
@@ -210,7 +227,7 @@ update msg model =
             , Effect.none
             )
 
-        DismissedHelpDialog ->
+        DismissedDialog ->
             ( { model | phase = ReadyForInput }
             , Effect.none
             )
@@ -218,14 +235,26 @@ update msg model =
 
 noValidMovesLeft : Model -> Bool
 noValidMovesLeft model =
-    let
-        noTilesHaveBeenMoved : Direction -> Bool
-        noTilesHaveBeenMoved direction =
-            List.sortBy .id (slide direction model.tiles)
-                == List.sortBy .id model.tiles
-    in
     [ Up, Left, Down, Right ]
-        |> List.all noTilesHaveBeenMoved
+        |> List.all (cannotMoveAnyTiles model)
+
+
+cannotMoveAnyTiles : Model -> Direction -> Bool
+cannotMoveAnyTiles model direction =
+    List.sortBy .id (slide direction model.tiles)
+        == List.sortBy .id model.tiles
+
+
+applyWinCondition : Model -> Model
+applyWinCondition model =
+    if List.any is2048 model.tiles then
+        { model | phase = PlayerWon }
+
+    else if noValidMovesLeft model then
+        { model | phase = GameOver }
+
+    else
+        { model | phase = ReadyForInput }
 
 
 moveTilesInDirection :
@@ -238,13 +267,8 @@ moveTilesInDirection direction model =
             newTiles : List Tile
             newTiles =
                 slide direction model.tiles
-
-            noTilesHaveMoved : Bool
-            noTilesHaveMoved =
-                List.sortBy .id newTiles
-                    == List.sortBy .id model.tiles
         in
-        if noTilesHaveMoved then
+        if cannotMoveAnyTiles model direction then
             ( model, Effect.none )
 
         else
@@ -486,6 +510,19 @@ subscriptions model =
 port touch : ({ dx : Float, dy : Float } -> msg) -> Sub msg
 
 
+saveCurrentGame : Model -> Effect msg
+saveCurrentGame model =
+    Game.encode
+        { tiles = model.tiles
+        , score = model.score
+        }
+        |> saveGame
+        |> Effect.sendCmd
+
+
+port saveGame : Json.Encode.Value -> Cmd msg
+
+
 keyPressDecoder : Json.Decode.Decoder Msg
 keyPressDecoder =
     let
@@ -536,27 +573,36 @@ view model =
                     |> List.map (viewKeyedTile model)
                 )
             ]
-        , div []
+        , div [ class "buttons" ]
             [ button
-                [ class "help"
+                [ class "button"
+                , Html.Events.onClick ClickedNewGameFromGameScreen
+                ]
+                [ text "New game" ]
+            , button
+                [ class "button button--secondary"
                 , Html.Events.onClick ClickedHelpText
                 ]
                 [ text "How do I play?" ]
             ]
-        , div [ style "margin-top" "2rem" ]
+        , div
+            [ style "position" "fixed"
+            , style "right" "2rem"
+            , style "bottom" "2rem"
+            ]
             [ a
                 [ href "https://github.com/elm-land/2048"
                 , target "_blank"
                 , class "help"
                 ]
-                [ text "Source code" ]
+                [ text "🔗 Source code" ]
             ]
         , case model.phase of
             PlayerWon ->
                 viewDialog
                     { title = "You won!"
                     , description = [ "Final score: " ++ String.fromInt model.score ]
-                    , button = ( "New game", ClickedNewGame )
+                    , buttons = [ ( "New game", ClickedNewGameFromDialog ) ]
                     }
 
             GameOver ->
@@ -566,7 +612,7 @@ view model =
                         [ "No more tiles could be moved..."
                         , "Final score: " ++ String.fromInt model.score
                         ]
-                    , button = ( "Try again?", ClickedNewGame )
+                    , buttons = [ ( "Try again?", ClickedNewGameFromDialog ) ]
                     }
 
             ReadingHelpText ->
@@ -577,7 +623,19 @@ view model =
                         , "When two tiles with the same value collide, they'll combine into one tile with double the value!"
                         , "Can you keep combining tiles until you reach 2048?"
                         ]
-                    , button = ( "Return to game", DismissedHelpDialog )
+                    , buttons = [ ( "Return to game", DismissedDialog ) ]
+                    }
+
+            ConfirmingNewGame ->
+                viewDialog
+                    { title = "Create new game?"
+                    , description =
+                        [ "This will lose all progress on the current game."
+                        ]
+                    , buttons =
+                        [ ( "Start new game", ClickedNewGameFromDialog )
+                        , ( "Return to game", DismissedDialog )
+                        ]
                     }
 
             _ ->
@@ -589,25 +647,30 @@ view model =
 viewDialog :
     { title : String
     , description : List String
-    , button : ( String, Msg )
+    , buttons : List ( String, Msg )
     }
     -> Html Msg
 viewDialog props =
-    let
-        ( label, onClick ) =
-            props.button
-    in
-    div []
+    div [ style "position" "fixed" ]
         [ div [ class "dialog__overlay" ] []
         , div [ class "dialog" ]
             [ h3 [] [ text props.title ]
             , div []
                 (List.map (\x -> p [] [ text x ]) props.description)
-            , button
-                [ class "button"
-                , Html.Events.onClick onClick
-                ]
-                [ text label ]
+            , div [ class "buttons" ]
+                (List.indexedMap
+                    (\i ( label, onClick ) ->
+                        button
+                            [ class "button"
+                            , classList
+                                [ ( "button--secondary", i > 0 )
+                                ]
+                            , Html.Events.onClick onClick
+                            ]
+                            [ text label ]
+                    )
+                    props.buttons
+                )
             ]
         ]
 
