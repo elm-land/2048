@@ -1,6 +1,6 @@
 export const flags = ({ env }) => {
   return {
-    game: JSON.parse(localStorage.game) || null
+    game: JSON.parse(localStorage.getItem('game') || null)
   }
 }
 
