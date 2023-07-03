@@ -575,12 +575,12 @@ view model =
             ]
         , div [ class "buttons" ]
             [ button
-                [ class "button"
+                [ class "help"
                 , Html.Events.onClick ClickedNewGameFromGameScreen
                 ]
                 [ text "New game" ]
             , button
-                [ class "button button--secondary"
+                [ class "help"
                 , Html.Events.onClick ClickedHelpText
                 ]
                 [ text "How do I play?" ]
